@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FingerPrint Risk Analyzer | BioCypher</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060a0f;
+    --bg2: #0b1118;
+    --bg3: #111923;
+    --panel: #0d1520;
+    --border: #1a2d44;
+    --border-glow: #00ffe7;
+    --accent: #00ffe7;
+    --accent2: #ff2e7e;
+    --accent3: #f0c420;
+    --text: #ccdbe8;
+    --text-dim: #4a6a82;
+    --red: #ff2e2e;
+    --orange: #ff8c00;
+    --yellow: #f5c518;
+    --green: #00e676;
+    --font-mono: 'Share Tech Mono', monospace;
+    --font-ui: 'Rajdhani', sans-serif;
+    --font-head: 'Orbitron', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* Grid bg */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,255,231,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,231,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+  /* HEADER */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 20px 0;
+    position: relative;
+  }
+  header::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
+  .header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .logo-icon {
+    width: 44px; height: 44px;
+    border: 1px solid var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+    clip-path: polygon(10% 0%, 90% 0%, 100% 10%, 100% 90%, 90% 100%, 10% 100%, 0% 90%, 0% 10%);
+    background: rgba(0,255,231,0.05);
+  }
+  .logo-icon svg { width: 24px; height: 24px; }
+  .logo h1 {
+    font-family: var(--font-head);
+    font-size: 1.4rem;
+    color: #fff;
+    letter-spacing: 2px;
+  }
+  .logo h1 span { color: var(--accent); }
+  .header-badge {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--accent2);
+    border: 1px solid var(--accent2);
+    padding: 4px 10px;
+    letter-spacing: 2px;
+    animation: pulse-border 2s infinite;
+  }
+  @keyframes pulse-border {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  /* HERO */
+  .hero {
+    padding: 52px 0 36px;
+    text-align: center;
+  }
+  .hero-tag {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--accent);
+    letter-spacing: 4px;
+    margin-bottom: 16px;
+    opacity: 0.8;
+  }
+  .hero h2 {
+    font-family: var(--font-head);
+    font-size: 2.2rem;
+    color: #fff;
+    line-height: 1.2;
+    margin-bottom: 14px;
+  }
+  .hero h2 em { color: var(--accent2); font-style: normal; }
+  .hero p {
+    font-size: 1.05rem;
+    color: var(--text-dim);
+    max-width: 560px;
+    margin: 0 auto;
+    line-height: 1.7;
+  }
+
+  /* WARNING BANNER */
+  .warning-banner {
+    background: rgba(255,46,126,0.07);
+    border: 1px solid rgba(255,46,126,0.3);
+    border-left: 3px solid var(--accent2);
+    padding: 12px 20px;
+    margin: 0 0 36px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: rgba(255,46,126,0.9);
+  }
+  .warning-banner .warn-icon { font-size: 1.1rem; flex-shrink: 0; }
+
+  /* MAIN LAYOUT */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 32px;
+  }
+  @media (max-width: 720px) {
+    .main-grid { grid-template-columns: 1fr; }
+    .hero h2 { font-size: 1.5rem; }
+  }
+
+  /* PANELS */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.5;
+  }
+  .panel-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .panel-title {
+    font-family: var(--font-head);
+    font-size: 0.75rem;
+    letter-spacing: 2px;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+  .panel-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: blink 1.5s infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  .panel-body { padding: 20px; }
+
+  /* UPLOAD AREA */
+  .drop-zone {
+    border: 2px dashed var(--border);
+    background: rgba(0,255,231,0.02);
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(0,255,231,0.06);
+  }
+  .drop-zone .drop-icon {
+    font-size: 2.5rem;
+    filter: grayscale(0.5);
+  }
+  .drop-zone h3 {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 1rem;
+    color: #fff;
+  }
+  .drop-zone p {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+  .drop-zone input[type=file] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  /* Preview */
+  .preview-container {
+    display: none;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .preview-img {
+    width: 100%;
+    max-height: 220px;
+    object-fit: contain;
+    background: #000;
+    border: 1px solid var(--border);
+  }
+  .preview-filename {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-align: center;
+  }
+  .btn-analyze {
+    width: 100%;
+    padding: 14px;
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--font-head);
+    font-size: 0.85rem;
+    letter-spacing: 3px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-analyze::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--accent);
+    transform: translateX(-100%);
+    transition: transform 0.3s;
+    z-index: -1;
+  }
+  .btn-analyze:hover::before { transform: translateX(0); }
+  .btn-analyze:hover { color: var(--bg); }
+  .btn-analyze:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-reset {
+    width: 100%;
+    padding: 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    cursor: pointer;
+    letter-spacing: 2px;
+    transition: all 0.2s;
+  }
+  .btn-reset:hover { border-color: var(--accent2); color: var(--accent2); }
+
+  /* RESULTS PANEL */
+  .results-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 300px;
+    gap: 16px;
+    opacity: 0.4;
+  }
+  .results-empty .empty-icon { font-size: 3rem; }
+  .results-empty p {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    text-align: center;
+  }
+
+  .results-content { display: none; }
+
+  /* Risk Gauge */
+  .risk-gauge-wrap {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 16px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  .gauge-circle {
+    flex-shrink: 0;
+    width: 90px; height: 90px;
+    border-radius: 50%;
+    border: 3px solid;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .gauge-circle .gauge-num {
+    font-family: var(--font-head);
+    font-size: 1.6rem;
+    font-weight: 900;
+    line-height: 1;
+  }
+  .gauge-circle .gauge-pct {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    opacity: 0.7;
+    margin-top: 2px;
+  }
+  .gauge-info { flex: 1; }
+  .gauge-label {
+    font-family: var(--font-head);
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+  }
+  .gauge-sub {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* Metric bars */
+  .metrics { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .metric-row { display: flex; flex-direction: column; gap: 4px; }
+  .metric-label {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+  .metric-label span:last-child { color: var(--accent); }
+  .metric-bar-bg {
+    height: 4px;
+    background: var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .metric-bar-fill {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    background: var(--accent);
+    width: 0%;
+    transition: width 1s ease;
+  }
+
+  /* Analyzed image */
+  .analyzed-img-wrap {
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+  }
+  .analyzed-img-wrap img {
+    width: 100%;
+    display: block;
+  }
+  .img-caption {
+    padding: 6px 10px;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    background: rgba(0,0,0,0.4);
+    border-top: 1px solid var(--border);
+  }
+
+  /* Recommendations */
+  .recs-title {
+    font-family: var(--font-head);
+    font-size: 0.7rem;
+    letter-spacing: 2px;
+    color: var(--accent3);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .recs-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent3), transparent);
+    opacity: 0.4;
+  }
+  .rec-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 10px;
+    background: rgba(240,196,32,0.05);
+    border-left: 2px solid var(--accent3);
+    margin-bottom: 7px;
+    font-size: 0.82rem;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .rec-item::before {
+    content: '▸';
+    color: var(--accent3);
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* Loading state */
+  .loading-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: rgba(6,10,15,0.92);
+    z-index: 10;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+  }
+  .loading-overlay.active { display: flex; }
+  .loader-ring {
+    width: 50px; height: 50px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loader-text {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    letter-spacing: 2px;
+    animation: flicker 0.5s infinite alternate;
+  }
+  @keyframes flicker { from { opacity: 0.6; } to { opacity: 1; } }
+
+  /* HOW IT WORKS */
+  .how-section { margin-bottom: 40px; }
+  .section-title {
+    font-family: var(--font-head);
+    font-size: 0.75rem;
+    letter-spacing: 3px;
+    color: var(--accent);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    opacity: 0.3;
+  }
+  .flow-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 720px) { .flow-grid { grid-template-columns: 1fr 1fr; } }
+  .flow-step {
+    padding: 18px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    text-align: center;
+    position: relative;
+  }
+  .flow-step-num {
+    font-family: var(--font-head);
+    font-size: 1.8rem;
+    font-weight: 900;
+    color: rgba(0,255,231,0.12);
+    margin-bottom: 10px;
+  }
+  .flow-step-icon { font-size: 1.5rem; margin-bottom: 10px; }
+  .flow-step h4 {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+  .flow-step p {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+  .flow-arrow {
+    position: absolute;
+    right: -12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent);
+    font-size: 1.2rem;
+    z-index: 1;
+  }
+
+  /* DEFENSE SECTION */
+  .defense-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+  @media (max-width: 720px) { .defense-grid { grid-template-columns: 1fr; } }
+  .defense-card {
+    padding: 20px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--green);
+  }
+  .defense-card .d-icon { font-size: 1.8rem; margin-bottom: 12px; }
+  .defense-card h4 {
+    font-family: var(--font-head);
+    font-size: 0.75rem;
+    letter-spacing: 1px;
+    color: var(--green);
+    margin-bottom: 10px;
+  }
+  .defense-card ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .defense-card ul li {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text);
+    padding-left: 14px;
+    position: relative;
+    line-height: 1.5;
+  }
+  .defense-card ul li::before {
+    content: '>';
+    position: absolute;
+    left: 0;
+    color: var(--green);
+    opacity: 0.6;
+  }
+
+  /* FOOTER */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 20px 0;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--text-dim);
+  }
+  footer span { color: var(--accent); }
+
+  /* Glitch animation on title */
+  @keyframes glitch {
+    0% { text-shadow: none; }
+    20% { text-shadow: -2px 0 var(--accent2), 2px 0 var(--accent); }
+    40% { text-shadow: 2px 0 var(--accent2), -2px 0 var(--accent); }
+    60% { text-shadow: none; }
+    80% { text-shadow: 1px 1px var(--accent2); }
+    100% { text-shadow: none; }
+  }
+  .hero h2 { animation: glitch 5s infinite; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#00ffe7" stroke-width="1.5">
+            <path d="M12 2C9 2 7 4 7 7c0 2 1 3.5 2.5 4.5C8 12.5 6 14 6 17c0 3 2.5 5 6 5s6-2 6-5c0-3-2-4.5-3.5-5.5C16 10.5 17 9 17 7c0-3-2-5-5-5z"/>
+            <circle cx="12" cy="7" r="1.5" fill="#00ffe7" stroke="none"/>
+            <path d="M9 17c0-1.7 1.3-3 3-3s3 1.3 3 3"/>
+          </svg>
+        </div>
+        <h1>Bio<span>Cypher</span></h1>
+      </div>
+      <div class="header-badge">⚠ RESEARCH TOOL ONLY</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <div class="hero">
+      <p class="hero-tag">// FINGERPRINT EXPOSURE ANALYSIS</p>
+      <h2>Can Your Selfie <em>Leak</em> Your Biometrics?</h2>
+      <p>Upload a photo (like a typical Snapchat pose) and see how much fingerprint data is exposed — and how attackers could exploit it.</p>
+    </div>
+
+    <div class="warning-banner">
+      <span class="warn-icon">⚡</span>
+      <span>DISCLAIMER: This tool is for cybersecurity education & awareness only. No fingerprint data is stored or transmitted. Processing happens locally on server and images are discarded immediately.</span>
+    </div>
+
+    <div class="main-grid">
+      <!-- UPLOAD PANEL -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-dot"></div>
+          <span class="panel-title">Image Input</span>
+        </div>
+        <div class="panel-body" style="position:relative;">
+          <div class="loading-overlay" id="loadingOverlay">
+            <div class="loader-ring"></div>
+            <div class="loader-text">ANALYZING BIOMETRICS...</div>
+          </div>
+
+          <!-- Drop zone -->
+          <div class="drop-zone" id="dropZone">
+            <input type="file" id="fileInput" accept="image/*">
+            <div class="drop-icon">🖐️</div>
+            <h3>Drop Image Here</h3>
+            <p>Supports: JPG, PNG, WEBP, BMP</p>
+            <p>Max size: 10MB</p>
+          </div>
+
+          <!-- Preview -->
+          <div class="preview-container" id="previewContainer">
+            <img id="previewImg" class="preview-img" src="" alt="Preview">
+            <p class="preview-filename" id="previewName"></p>
+            <button class="btn-analyze" id="analyzeBtn">▶ ANALYZE FINGERPRINT RISK</button>
+            <button class="btn-reset" id="resetBtn">✕ RESET / UPLOAD NEW IMAGE</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- RESULTS PANEL -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-dot" style="background:var(--accent2);box-shadow:0 0 8px var(--accent2);"></div>
+          <span class="panel-title" style="color:var(--accent2);">Risk Analysis</span>
+        </div>
+        <div class="panel-body">
+          <!-- Empty state -->
+          <div class="results-empty" id="resultsEmpty">
+            <div class="empty-icon">🔒</div>
+            <p>Upload an image to begin<br>fingerprint risk analysis</p>
+          </div>
+
+          <!-- Results -->
+          <div class="results-content" id="resultsContent">
+            <!-- Risk gauge -->
+            <div class="risk-gauge-wrap">
+              <div class="gauge-circle" id="gaugeCircle">
+                <span class="gauge-num" id="gaugeNum">0</span>
+                <span class="gauge-pct">/ 100</span>
+              </div>
+              <div class="gauge-info">
+                <div class="gauge-label" id="gaugeLabel">—</div>
+                <div class="gauge-sub" id="gaugeSub">Awaiting analysis...</div>
+              </div>
+            </div>
+
+            <!-- Metrics -->
+            <div class="metrics">
+              <div class="metric-row">
+                <div class="metric-label"><span>Skin/Finger Region</span><span id="mSkin">0%</span></div>
+                <div class="metric-bar-bg"><div class="metric-bar-fill" id="bSkin"></div></div>
+              </div>
+              <div class="metric-row">
+                <div class="metric-label"><span>Ridge Visibility</span><span id="mRidge">0%</span></div>
+                <div class="metric-bar-bg"><div class="metric-bar-fill" id="bRidge"></div></div>
+              </div>
+              <div class="metric-row">
+                <div class="metric-label"><span>Image Clarity</span><span id="mClarity">0%</span></div>
+                <div class="metric-bar-bg"><div class="metric-bar-fill" id="bClarity"></div></div>
+              </div>
+              <div class="metric-row">
+                <div class="metric-label"><span>Edge Detail Density</span><span id="mEdge">0%</span></div>
+                <div class="metric-bar-bg"><div class="metric-bar-fill" id="bEdge"></div></div>
+              </div>
+            </div>
+
+            <!-- Analyzed image -->
+            <div class="analyzed-img-wrap">
+              <img id="analyzedImg" src="" alt="Analyzed">
+              <div class="img-caption">🔴 Detected skin regions &nbsp;|&nbsp; 🟡 Ridge pattern overlay &nbsp;|&nbsp; 🟢 Finger contours</div>
+            </div>
+
+            <!-- Recommendations -->
+            <div class="recs-title">DEFENSE RECOMMENDATIONS</div>
+            <div id="recsList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOW IT WORKS -->
+    <div class="how-section">
+      <div class="section-title">HOW THE ATTACK WORKS</div>
+      <div class="flow-grid">
+        <div class="flow-step">
+          <div class="flow-step-num">01</div>
+          <div class="flow-step-icon">📱</div>
+          <h4>Photo Posted</h4>
+          <p>Victim posts selfie on Snapchat / Instagram with fingers visible</p>
+          <span class="flow-arrow">›</span>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num">02</div>
+          <div class="flow-step-icon">🔍</div>
+          <h4>Ridge Extraction</h4>
+          <p>Attacker uses Gabor filters + CV to extract fingerprint ridge patterns</p>
+          <span class="flow-arrow">›</span>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num">03</div>
+          <div class="flow-step-icon">🖨️</div>
+          <h4>Clone Created</h4>
+          <p>Fake fingerprint printed on conductive film or gelatin mold</p>
+          <span class="flow-arrow">›</span>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num">04</div>
+          <div class="flow-step-icon">🔓</div>
+          <h4>Bypass Attempted</h4>
+          <p>Cloned print used to unlock phone, apps, or payment systems</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- DEFENSE SECTION -->
+    <div class="section-title">DEFENSE STRATEGIES</div>
+    <div class="defense-grid">
+      <div class="defense-card">
+        <div class="d-icon">📸</div>
+        <h4>PHOTO HYGIENE</h4>
+        <ul>
+          <li>Curl or fold fingers in photos</li>
+          <li>Keep hands away from camera</li>
+          <li>Use blur/mosaic on finger tips</li>
+          <li>Avoid high-res close-up hand shots</li>
+        </ul>
+      </div>
+      <div class="defense-card">
+        <div class="d-icon">🔐</div>
+        <h4>DEVICE SECURITY</h4>
+        <ul>
+          <li>Use PIN/password as primary lock</li>
+          <li>Enable liveness detection (if available)</li>
+          <li>Enable 2FA on all critical accounts</li>
+          <li>Avoid biometrics for banking apps</li>
+        </ul>
+      </div>
+      <div class="defense-card">
+        <div class="d-icon">🛡️</div>
+        <h4>AWARENESS</h4>
+        <ul>
+          <li>Educate friends & family</li>
+          <li>Review social media privacy settings</li>
+          <li>Monitor for account breaches</li>
+          <li>Report suspicious login attempts</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    BioCypher &nbsp;|&nbsp; <span>Fingerprint Risk Analyzer</span> &nbsp;|&nbsp; Built for Cybersecurity Education &nbsp;|&nbsp; MUET Jamshoro
+  </div>
+</footer>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const previewContainer = document.getElementById('previewContainer');
+const previewImg = document.getElementById('previewImg');
+const previewName = document.getElementById('previewName');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const resetBtn = document.getElementById('resetBtn');
+const loadingOverlay = document.getElementById('loadingOverlay');
+const resultsEmpty = document.getElementById('resultsEmpty');
+const resultsContent = document.getElementById('resultsContent');
+
+let selectedFile = null;
+
+function showPreview(file) {
+  selectedFile = file;
+  const reader = new FileReader();
+  reader.onload = e => {
+    previewImg.src = e.target.result;
+    previewName.textContent = `📁 ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+    dropZone.style.display = 'none';
+    previewContainer.style.display = 'flex';
+    previewContainer.style.flexDirection = 'column';
+    previewContainer.style.gap = '14px';
+  };
+  reader.readAsDataURL(file);
+}
+
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) showPreview(e.target.files[0]);
+});
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) showPreview(e.dataTransfer.files[0]);
+});
+
+resetBtn.addEventListener('click', () => {
+  selectedFile = null;
+  fileInput.value = '';
+  dropZone.style.display = '';
+  previewContainer.style.display = 'none';
+  resultsEmpty.style.display = 'flex';
+  resultsContent.style.display = 'none';
+});
+
+analyzeBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+
+  loadingOverlay.classList.add('active');
+  analyzeBtn.disabled = true;
+
+  const formData = new FormData();
+  formData.append('image', selectedFile);
+
+  try {
+    const resp = await fetch('/analyze', { method: 'POST', body: formData });
+    const data = await resp.json();
+
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+
+    displayResults(data);
+  } catch (err) {
+    alert('Analysis failed. Make sure Flask server is running.');
+    console.error(err);
+  } finally {
+    loadingOverlay.classList.remove('active');
+    analyzeBtn.disabled = false;
+  }
+});
+
+function displayResults(data) {
+  resultsEmpty.style.display = 'none';
+  resultsContent.style.display = 'block';
+
+  // Gauge
+  const circle = document.getElementById('gaugeCircle');
+  document.getElementById('gaugeNum').textContent = data.risk_score;
+  document.getElementById('gaugeLabel').textContent = data.risk_level;
+  document.getElementById('gaugeLabel').style.color = data.risk_color;
+  circle.style.borderColor = data.risk_color;
+  circle.style.boxShadow = `0 0 20px ${data.risk_color}44`;
+  document.getElementById('gaugeNum').style.color = data.risk_color;
+  document.getElementById('gaugeSub').textContent =
+    `Resolution: ${data.resolution} | Skin: ${data.skin_detected}% of frame`;
+
+  // Bars
+  animateBar('mSkin', 'bSkin', data.skin_detected);
+  animateBar('mRidge', 'bRidge', data.ridge_visibility);
+  animateBar('mClarity', 'bClarity', data.image_clarity);
+  animateBar('mEdge', 'bEdge', data.edge_density);
+
+  // Analyzed image
+  document.getElementById('analyzedImg').src = 'data:image/jpeg;base64,' + data.analyzed_image;
+
+  // Recommendations
+  const recsList = document.getElementById('recsList');
+  recsList.innerHTML = '';
+  data.recommendations.forEach(rec => {
+    const div = document.createElement('div');
+    div.className = 'rec-item';
+    div.textContent = rec;
+    recsList.appendChild(div);
+  });
+}
+
+function animateBar(labelId, barId, value) {
+  document.getElementById(labelId).textContent = value.toFixed(1) + '%';
+  setTimeout(() => {
+    document.getElementById(barId).style.width = Math.min(value, 100) + '%';
+  }, 100);
+}
+</script>
+</body>
+</html>
