@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+static/uploads/*
+!static/uploads/.gitkeep
+.vscode/
+.idea/

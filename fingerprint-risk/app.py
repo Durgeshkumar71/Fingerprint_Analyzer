@@ -1,191 +1,313 @@
-from flask import Flask, render_template, request, jsonify
-import cv2
-import numpy as np
-from PIL import Image
-import base64
-import io
+"""
+BioCypher 2.0 — Biometric Cybersecurity & Fingerprint Exposure Suite
+===================================================================
+Hardened Flask Backend Server providing:
+- High-performance multi-spectral biometric CV forensics (/analyze)
+- Active defense privacy redactor & ridge sanitizer (/sanitize)
+- Preset sample scenario gallery (/api/samples)
+- Comprehensive OWASP Top 10 defense & security hardening
+"""
+
+from flask import Flask, render_template, request, jsonify, make_response
+from werkzeug.utils import secure_filename
 import os
-import uuid
+import base64
+import time
+import collections
+import threading
+import cv_engine
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max
-UPLOAD_FOLDER = 'static/uploads'
+
+# Enforce strict 16MB upload limit
+MAX_FILE_MB = 16
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_MB * 1024 * 1024
+
+UPLOAD_FOLDER = os.path.join('static', 'uploads')
+SAMPLES_FOLDER = os.path.join('static', 'samples')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(SAMPLES_FOLDER, exist_ok=True)
 
-def analyze_fingerprint_risk(image_bytes):
+# ---------------------------------------------------------------------------
+# Rate Limiting & Abuse Prevention Middleware
+# ---------------------------------------------------------------------------
+RATE_LIMIT_WINDOW = 60  # seconds
+MAX_REQUESTS_PER_WINDOW = 40  # requests per window per IP
+_ip_request_history = collections.defaultdict(list)
+_rate_limit_lock = threading.Lock()
+
+def is_client_rate_limited(client_ip):
     """
-    Analyzes an uploaded image for fingerprint visibility risk.
-    Uses computer vision to detect ridge patterns, contrast, and finger regions.
+    Sliding window rate limiter to prevent computational DoS on CPU-heavy CV endpoints.
     """
-    # Decode image
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        return None
+    now = time.time()
+    with _rate_limit_lock:
+        timestamps = _ip_request_history[client_ip]
+        # Prune older than window
+        valid_timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+        _ip_request_history[client_ip] = valid_timestamps
+        if len(valid_timestamps) >= MAX_REQUESTS_PER_WINDOW:
+            return True
+        _ip_request_history[client_ip].append(now)
+        return False
 
-    original = img.copy()
-    h, w = img.shape[:2]
-
-    # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # --- STEP 1: Skin detection (find finger regions) ---
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    lower_skin = np.array([0, 20, 70], dtype=np.uint8)
-    upper_skin = np.array([20, 255, 255], dtype=np.uint8)
-    skin_mask = cv2.inRange(hsv, lower_skin, upper_skin)
-
-    # Also check another range for darker skin
-    lower_skin2 = np.array([0, 10, 60], dtype=np.uint8)
-    upper_skin2 = np.array([25, 200, 255], dtype=np.uint8)
-    skin_mask2 = cv2.inRange(hsv, lower_skin2, upper_skin2)
-    skin_mask = cv2.bitwise_or(skin_mask, skin_mask2)
-
-    skin_area_ratio = np.count_nonzero(skin_mask) / (h * w)
-
-    # --- STEP 2: Ridge/texture detection using Gabor filters ---
-    def apply_gabor(gray_img):
-        responses = []
-        for theta in [0, np.pi/4, np.pi/2, 3*np.pi/4]:
-            kernel = cv2.getGaborKernel((21, 21), 4.0, theta, 10.0, 0.5, 0, ktype=cv2.CV_32F)
-            filtered = cv2.filter2D(gray_img, cv2.CV_8UC3, kernel)
-            responses.append(filtered)
-        return np.mean(responses, axis=0).astype(np.uint8)
-
-    gabor_response = apply_gabor(gray)
-    ridge_intensity = float(np.mean(gabor_response))
-
-    # --- STEP 3: Edge density (sharpness / detail level) ---
-    edges = cv2.Canny(gray, 50, 150)
-    edge_density = float(np.count_nonzero(edges)) / (h * w)
-
-    # --- STEP 4: Image resolution & clarity score ---
-    laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    clarity_score = min(laplacian_var / 1000.0, 1.0)
-
-    # --- STEP 5: Local contrast in skin regions ---
-    if np.count_nonzero(skin_mask) > 100:
-        skin_pixels = gray[skin_mask > 0]
-        local_contrast = float(np.std(skin_pixels)) / 128.0
-    else:
-        local_contrast = 0.0
-
-    # --- RISK SCORE CALCULATION ---
-    # Weights based on real biometric extraction factors
-    w_skin = 0.25       # presence of fingers
-    w_ridge = 0.25      # ridge pattern visibility
-    w_edge = 0.20       # detail / sharpness
-    w_clarity = 0.20    # image quality
-    w_contrast = 0.10   # local contrast in finger region
-
-    skin_score = min(skin_area_ratio * 3.0, 1.0)
-    ridge_score = min(ridge_intensity / 128.0, 1.0)
-    edge_score = min(edge_density * 20.0, 1.0)
-    contrast_score = min(local_contrast, 1.0)
-
-    raw_risk = (
-        skin_score * w_skin +
-        ridge_score * w_ridge +
-        edge_score * w_edge +
-        clarity_score * w_clarity +
-        contrast_score * w_contrast
+# ---------------------------------------------------------------------------
+# HTTP Security Headers (OWASP Top 10 Compliance)
+# ---------------------------------------------------------------------------
+@app.after_request
+def apply_security_headers(response):
+    """
+    Attaches defense-in-depth security headers to every response.
+    """
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(self), microphone=(), geolocation=()'
+    
+    # Content-Security-Policy (CSP) restricting execution boundaries
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self';"
     )
-    risk_percent = int(min(raw_risk * 100 * 1.8, 99))  # scale & cap
+    response.headers['Content-Security-Policy'] = csp
+    return response
 
-    # --- STEP 6: Create highlighted output image ---
-    output = original.copy()
-
-    # Highlight detected skin/finger regions
-    skin_highlight = np.zeros_like(output)
-    skin_highlight[skin_mask > 0] = [0, 50, 255]  # red tint on fingers
-    output = cv2.addWeighted(output, 0.7, skin_highlight, 0.3, 0)
-
-    # Overlay ridge visualization
-    ridge_overlay = cv2.applyColorMap(gabor_response, cv2.COLORMAP_INFERNO)
-    ridge_mask = (gabor_response > 60).astype(np.uint8) * 255
-    ridge_colored = np.zeros_like(output)
-    ridge_colored[ridge_mask > 0] = ridge_overlay[ridge_mask > 0]
-    output = cv2.addWeighted(output, 0.75, ridge_colored, 0.25, 0)
-
-    # Draw edge contours
-    contours, _ = cv2.findContours(skin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for cnt in contours:
-        if cv2.contourArea(cnt) > 500:
-            cv2.drawContours(output, [cnt], -1, (0, 255, 180), 2)
-
-    # Encode output image to base64
-    _, buffer = cv2.imencode('.jpg', output, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    output_b64 = base64.b64encode(buffer).decode('utf-8')
-
-    # Risk level label
-    if risk_percent >= 70:
-        level = "CRITICAL"
-        color = "#ff2e2e"
-    elif risk_percent >= 45:
-        level = "HIGH"
-        color = "#ff8c00"
-    elif risk_percent >= 25:
-        level = "MODERATE"
-        color = "#f5c518"
-    else:
-        level = "LOW"
-        color = "#00e676"
-
-    return {
-        "risk_score": risk_percent,
-        "risk_level": level,
-        "risk_color": color,
-        "skin_detected": round(skin_area_ratio * 100, 1),
-        "ridge_visibility": round(ridge_score * 100, 1),
-        "image_clarity": round(clarity_score * 100, 1),
-        "edge_density": round(edge_score * 100, 1),
-        "analyzed_image": output_b64,
-        "resolution": f"{w}x{h}px",
-        "recommendations": get_recommendations(risk_percent)
+# ---------------------------------------------------------------------------
+# Benchmark Sample Scenarios
+# ---------------------------------------------------------------------------
+SAMPLE_SCENARIOS = [
+    {
+        "id": "peace_sign",
+        "title": "Peace Sign / V-Pose Selfie",
+        "filename": "peace_sign_selfie.jpg",
+        "category": "Social Media Selfie",
+        "risk_expectation": "CRITICAL / HIGH",
+        "tag": "Common Snapchat Pose",
+        "description": "Standard selfie pose with two fingers pointed directly at lens; exposes index and middle finger ridges."
+    },
+    {
+        "id": "macro_finger",
+        "title": "Macro Fingertip Close-Up",
+        "filename": "macro_fingertip.jpg",
+        "category": "High-Res Macro",
+        "risk_expectation": "CRITICAL (90-99%)",
+        "tag": "Maximum Forensic Threat",
+        "description": "Close-up macro image exposing complete friction ridge flow, core pattern, and forensic minutiae."
+    },
+    {
+        "id": "safe_fist",
+        "title": "Curled Fingers / Closed Fist",
+        "filename": "safe_curled_fist.jpg",
+        "category": "Recommended Pose",
+        "risk_expectation": "LOW / SAFE (<25%)",
+        "tag": "Defense Strategy",
+        "description": "Hand positioned with fingers curled inwards; friction ridges are completely obscured from camera view."
+    },
+    {
+        "id": "distant_waving",
+        "title": "Distant Waving Pose",
+        "filename": "distant_waving_pose.jpg",
+        "category": "Distance Photo",
+        "risk_expectation": "LOW (<15%)",
+        "tag": "Low Optical Resolution",
+        "description": "Hand is visible at a distance; optical resolution is too low for ridge pattern reconstruction."
     }
+]
 
+def sanitize_output_filename(filename, max_length=48):
+    """Safely sanitizes and bounds filename string for XSS and log integrity."""
+    if not filename:
+        return "uploaded_image.jpg"
+    safe = secure_filename(str(filename))
+    if not safe:
+        safe = "image.jpg"
+    return safe[:max_length]
 
-def get_recommendations(risk_score):
-    recs = []
-    if risk_score >= 45:
-        recs.append("Curl or fold fingers in photos to hide ridge patterns")
-        recs.append("Avoid high-resolution close-up finger shots on social media")
-        recs.append("Enable 2FA on accounts — don't rely solely on biometrics")
-    if risk_score >= 25:
-        recs.append("Use blur/mosaic filter on finger areas before posting")
-        recs.append("Keep hands at a distance from camera in selfies")
-    recs.append("Review privacy settings on Snapchat & Instagram")
-    recs.append("Use strong passwords as backup to biometric locks")
-    return recs
+def extract_image_bytes(req):
+    """
+    Extracts image bytes from multipart form-data or JSON with strict path traversal & size validation.
+    """
+    # 1. Check for file in multipart form-data
+    if 'image' in req.files:
+        file = req.files['image']
+        if file and file.filename != '':
+            raw_fname = sanitize_output_filename(file.filename)
+            raw_bytes = file.read()
+            return raw_bytes, raw_fname
 
+    # 2. Check for JSON payload with base64 image data
+    if req.is_json:
+        data = req.get_json(silent=True)
+        if data and isinstance(data, dict):
+            b64_str = data.get('image_b64')
+            if b64_str and isinstance(b64_str, str):
+                if ',' in b64_str:
+                    b64_str = b64_str.split(',', 1)[1]
+                try:
+                    raw_bytes = base64.b64decode(b64_str, validate=True)
+                    return raw_bytes, "webcam_capture.jpg"
+                except Exception:
+                    return None, None
 
+    # 3. Check for sample_id with path traversal defense
+    sample_id = None
+    if req.form:
+        sample_id = req.form.get('sample_id')
+    if not sample_id and req.is_json:
+        json_data = req.get_json(silent=True)
+        if json_data and isinstance(json_data, dict):
+            sample_id = json_data.get('sample_id')
+
+    if sample_id and isinstance(sample_id, str):
+        for s in SAMPLE_SCENARIOS:
+            if s['id'] == sample_id:
+                safe_fname = os.path.basename(s['filename'])
+                sample_path = os.path.abspath(os.path.join(SAMPLES_FOLDER, safe_fname))
+                samples_dir_abs = os.path.abspath(SAMPLES_FOLDER)
+                # Ensure path is strictly within samples folder
+                if sample_path.startswith(samples_dir_abs) and os.path.isfile(sample_path):
+                    with open(sample_path, 'rb') as f:
+                        return f.read(), safe_fname
+
+    return None, None
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', samples=SAMPLE_SCENARIOS)
 
+@app.route('/api/samples', methods=['GET'])
+def get_samples():
+    """Returns metadata for the pre-loaded sample scenario test suite."""
+    return jsonify({
+        "status": "success",
+        "samples": SAMPLE_SCENARIOS
+    })
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    if 'image' not in request.files:
-        return jsonify({"error": "No image uploaded"}), 400
+    """
+    Full biometric exposure & minutiae diagnostic endpoint.
+    Protected by sliding-window rate limiting, magic byte verification, and decompression bomb defenses.
+    """
+    client_ip = request.remote_addr or 'unknown'
+    if is_client_rate_limited(client_ip):
+        return jsonify({
+            "error": "Rate limit exceeded. Too many forensic scans requested.",
+            "retry_after_seconds": 30
+        }), 429
 
-    file = request.files['image']
-    if file.filename == '':
-        return jsonify({"error": "Empty filename"}), 400
+    image_bytes, filename = extract_image_bytes(request)
+    if not image_bytes:
+        return jsonify({
+            "error": "No valid image provided. Please upload an image file, capture via webcam, or choose a benchmark preset."
+        }), 400
 
-    allowed = {'png', 'jpg', 'jpeg', 'webp', 'bmp'}
-    ext = file.filename.rsplit('.', 1)[-1].lower()
-    if ext not in allowed:
-        return jsonify({"error": "Unsupported file type"}), 400
+    results = cv_engine.analyze_image_forensics(image_bytes)
+    if results is None:
+        return jsonify({
+            "error": "Image validation failed. The payload is either corrupt, unreadable, or not a supported image format (JPEG, PNG, WEBP, BMP)."
+        }), 422
 
-    image_bytes = file.read()
-    result = analyze_fingerprint_risk(image_bytes)
+    results["filename"] = sanitize_output_filename(filename)
+    return jsonify(results)
 
-    if result is None:
-        return jsonify({"error": "Could not process image"}), 500
+@app.route('/sanitize', methods=['POST'])
+def sanitize():
+    """
+    Active Defense Endpoint:
+    Sanitizes detected finger/hand regions with adaptive blur, cyber mosaic, or adversarial scramble.
+    """
+    client_ip = request.remote_addr or 'unknown'
+    if is_client_rate_limited(client_ip):
+        return jsonify({
+            "error": "Rate limit exceeded. Please wait before submitting additional sanitization requests.",
+            "retry_after_seconds": 30
+        }), 429
 
-    return jsonify(result)
+    image_bytes, filename = extract_image_bytes(request)
+    if not image_bytes:
+        return jsonify({"error": "No image payload provided for sanitization."}), 400
 
+    # Sanitize and bound mode parameter
+    raw_mode = 'blur'
+    if request.form and 'mode' in request.form:
+        raw_mode = str(request.form.get('mode', 'blur')).strip().lower()
+    elif request.is_json:
+        data = request.get_json(silent=True) or {}
+        raw_mode = str(data.get('mode', 'blur')).strip().lower()
+
+    valid_modes = ('blur', 'mosaic', 'scramble')
+    mode = raw_mode if raw_mode in valid_modes else 'blur'
+
+    # Sanitize intensity parameter
+    intensity = 7
+    raw_intensity = None
+    if request.form and 'intensity' in request.form:
+        raw_intensity = request.form.get('intensity')
+    elif request.is_json:
+        data = request.get_json(silent=True) or {}
+        raw_intensity = data.get('intensity')
+
+    if raw_intensity is not None:
+        try:
+            intensity = max(1, min(10, int(raw_intensity)))
+        except (ValueError, TypeError):
+            intensity = 7
+
+    sanitized_res = cv_engine.sanitize_fingerprints(image_bytes, mode=mode, intensity=intensity)
+    if sanitized_res is None:
+        return jsonify({"error": "Sanitization failed on this image payload."}), 422
+
+    return jsonify(sanitized_res)
+
+# ---------------------------------------------------------------------------
+# Error Handlers
+# ---------------------------------------------------------------------------
+@app.errorhandler(413)
+def payload_too_large(error):
+    return jsonify({
+        "error": f"Upload payload exceeds maximum allowable size ({MAX_FILE_MB}MB)."
+    }), 413
+
+@app.errorhandler(404)
+def not_found_error(error):
+    if request.path.startswith('/api/') or request.method == 'POST':
+        return jsonify({"error": "Resource not found"}), 404
+    return render_template('index.html', samples=SAMPLE_SCENARIOS), 404
+
+@app.errorhandler(429)
+def too_many_requests_error(error):
+    return jsonify({
+        "error": "Too Many Requests. System is throttling compute-intensive image processing."
+    }), 429
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({
+        "error": "Internal processing error. The server encountered an unexpected condition."
+    }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Default to secure local host binding and non-debug mode unless explicitly configured
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
+    host = os.environ.get('FLASK_HOST', '127.0.0.1')
+    port = int(os.environ.get('FLASK_PORT', 5000))
+
+    print("=" * 65)
+    print(" BioCypher 2.0 Hardened Biometric Forensics Suite Initializing ")
+    print(f" Interface: http://{host}:{port}")
+    print(f" Security: OWASP Headers Active | Rate Limiter Enforced")
+    print(f" Debug Mode: {debug_mode}")
+    print("=" * 65)
+    app.run(debug=debug_mode, host=host, port=port)
