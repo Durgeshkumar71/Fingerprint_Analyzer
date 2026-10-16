@@ -301,8 +301,9 @@ def internal_server_error(error):
 if __name__ == '__main__':
     # Default to secure local host binding and non-debug mode unless explicitly configured
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
-    host = os.environ.get('FLASK_HOST', '127.0.0.1')
-    port = int(os.environ.get('FLASK_PORT', 5000))
+    # Support PORT env var for Hugging Face Spaces (defaults to 7860 there) and cloud platforms
+    port = int(os.environ.get('PORT', os.environ.get('FLASK_PORT', 5000)))
+    host = os.environ.get('FLASK_HOST', '0.0.0.0' if os.environ.get('PORT') else '127.0.0.1')
 
     print("=" * 65)
     print(" BioCypher 2.0 Hardened Biometric Forensics Suite Initializing ")
