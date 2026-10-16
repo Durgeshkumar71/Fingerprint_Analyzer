@@ -1,15 +1,3 @@
----
-title: BioCypher Fingerprint Analyzer
-emoji: 🔍
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-app_port: 7860
-pinned: false
-license: mit
-short_description: Forensic fingerprint risk analyzer & privacy shield
----
-
 <div align="center">
 
 # 🛡️ BioCypher 2.0
