@@ -458,11 +458,16 @@ def capture_ipcam():
             target_url = urllib.parse.urljoin(raw_url, '/shot.jpg')
 
     try:
+        import ssl
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+
         req = urllib.request.Request(
             target_url,
             headers={'User-Agent': 'BioCypher-IPCam/2.0'}
         )
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=5, context=ssl_ctx) as response:
             image_bytes = response.read(MAX_FILE_MB * 1024 * 1024)
 
         if not image_bytes or len(image_bytes) < 12:
