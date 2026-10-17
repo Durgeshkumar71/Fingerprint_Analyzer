@@ -129,5 +129,13 @@ class BioCypherSecurityAuditTests(unittest.TestCase):
         """Verify production debug configuration."""
         self.assertFalse(app.debug)
 
+    def test_07_ipcam_ssrf_defense(self):
+        """Verify SSRF defense rejects loopback or cloud metadata services."""
+        resp = self.client.post('/api/ipcam/capture', json={'url': 'http://127.0.0.1:8080/shot.jpg'})
+        self.assertEqual(resp.status_code, 403)
+
+        resp2 = self.client.post('/api/ipcam/capture', json={'url': 'http://169.254.169.254/latest/meta-data'})
+        self.assertEqual(resp2.status_code, 403)
+
 if __name__ == '__main__':
     unittest.main()

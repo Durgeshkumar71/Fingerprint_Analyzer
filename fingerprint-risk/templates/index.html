@@ -116,6 +116,7 @@
             <button class="source-btn active" id="tabUpload">📁 Upload File</button>
             <button class="source-btn" id="tabSamples">⚡ Test Examples</button>
             <button class="source-btn" id="tabCamera">📷 Use Camera</button>
+            <button class="source-btn" id="tabIpCam">🌐 IP Webcam</button>
           </div>
 
           <!-- 1. Drag & Drop File Upload -->
@@ -144,6 +145,34 @@
             <div style="display:flex;gap:10px;">
               <button class="btn-scan-action" id="captureCameraBtn" style="flex:1;">📸 Snap Photo</button>
               <button class="btn-clear-choice" id="cancelCameraBtn">Cancel</button>
+            </div>
+          </div>
+
+          <!-- 4. IP Webcam Wireless Connection View -->
+          <div class="camera-view-container" id="ipCamView" style="display:none;">
+            <div style="background:var(--bg-surface); padding:18px; border-radius:var(--radius-sm); border:1px solid var(--border-card); display:flex; flex-direction:column; gap:12px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:1.3rem;">🌐</span>
+                <div>
+                  <h4 style="color:#fff; font-size:0.92rem; margin:0;">Wireless IP Webcam Stream</h4>
+                  <p style="font-size:0.75rem; color:var(--text-secondary); margin:0;">Use your smartphone camera over Wi-Fi</p>
+                </div>
+              </div>
+
+              <div>
+                <label for="ipCamUrl" style="display:block; font-size:0.72rem; color:var(--text-muted); margin-bottom:5px; font-weight:700; letter-spacing:0.04em;">IP CAMERA STREAM URL</label>
+                <input type="text" id="ipCamUrl" placeholder="http://192.168.1.100:8080" style="width:100%; background:var(--bg-card); border:1px solid var(--border-card); border-radius:var(--radius-sm); padding:10px 12px; color:#fff; font-family:var(--font-mono); font-size:0.85rem; box-sizing:border-box;">
+              </div>
+
+              <div style="font-size:0.74rem; color:var(--text-secondary); background:rgba(255,255,255,0.02); padding:10px; border-radius:6px; border:1px dashed var(--border-card); line-height:1.5;">
+                📱 <strong>Android IP Webcam:</strong> <code>http://&lt;phone-ip&gt;:8080</code> or <code>/shot.jpg</code><br>
+                📱 <strong>DroidCam:</strong> <code>http://&lt;phone-ip&gt;:4747</code> or <code>/cam/1/frame.jpg</code>
+              </div>
+
+              <div style="display:flex; gap:10px;">
+                <button class="btn-scan-action" id="fetchIpCamBtn" style="flex:1;">📸 Capture Frame from Phone</button>
+                <button class="btn-clear-choice" id="cancelIpCamBtn">Cancel</button>
+              </div>
             </div>
           </div>
 

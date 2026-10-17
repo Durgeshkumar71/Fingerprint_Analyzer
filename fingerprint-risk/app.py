@@ -16,6 +16,10 @@ import time
 import secrets
 import threading
 import datetime
+import urllib.request
+import urllib.parse
+import urllib.error
+import ipaddress
 from collections import defaultdict, deque
 from functools import wraps
 
@@ -401,6 +405,89 @@ def get_samples():
         "status": "success",
         "samples": SAMPLE_SCENARIOS
     })
+
+@app.route('/api/ipcam/capture', methods=['POST'])
+def capture_ipcam():
+    """
+    Fetches a single snapshot frame from an IP Webcam (e.g. phone running IP Webcam app).
+    Enforces SSRF defense, scheme restriction (HTTP/HTTPS only), 5-second timeout,
+    and image payload verification.
+    """
+    client_ip = request.remote_addr or 'unknown'
+    is_limited, retry_after, _, _ = check_rate_limit(client_ip, tier="cv_heavy")
+    if is_limited:
+        return jsonify({
+            "error": "Rate limit exceeded. Please wait before fetching more camera frames.",
+            "retry_after_seconds": retry_after
+        }), 429
+
+    data = request.get_json(silent=True) or {}
+    raw_url = str(data.get('url', '')).strip()
+
+    if not raw_url:
+        return jsonify({"error": "No IP Webcam URL provided."}), 400
+
+    if not raw_url.startswith(('http://', 'https://')):
+        raw_url = 'http://' + raw_url
+
+    try:
+        parsed = urllib.parse.urlparse(raw_url)
+    except Exception:
+        return jsonify({"error": "Malformed URL format."}), 400
+
+    hostname = parsed.hostname
+    if not hostname:
+        return jsonify({"error": "Invalid IP address or hostname in URL."}), 400
+
+    # SSRF Defense: Disallow cloud metadata and loopback addresses
+    try:
+        ip_obj = ipaddress.ip_address(hostname)
+        if ip_obj.is_loopback or str(ip_obj) == "169.254.169.254":
+            return jsonify({"error": "Security Restriction: Connecting to loopback or metadata services is prohibited."}), 403
+    except ValueError:
+        if hostname.lower() in ('localhost', '127.0.0.1', '::1', 'instance-data'):
+            return jsonify({"error": "Security Restriction: Localhost loopback is not allowed for IP webcam."}), 403
+
+    # Auto-resolve common IP Webcam snapshot endpoints if user entered only host:port
+    target_url = raw_url
+    if parsed.path in ('', '/'):
+        # Check standard port signatures or default to /shot.jpg
+        if parsed.port == 4747: # DroidCam
+            target_url = urllib.parse.urljoin(raw_url, '/cam/1/frame.jpg')
+        else:
+            target_url = urllib.parse.urljoin(raw_url, '/shot.jpg')
+
+    try:
+        req = urllib.request.Request(
+            target_url,
+            headers={'User-Agent': 'BioCypher-IPCam/2.0'}
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            image_bytes = response.read(MAX_FILE_MB * 1024 * 1024)
+
+        if not image_bytes or len(image_bytes) < 12:
+            return jsonify({"error": "Received empty or truncated frame from IP Webcam."}), 422
+
+        # Verify magic byte header (JPEG, PNG, WEBP)
+        is_valid = (
+            image_bytes[:3] == b'\xff\xd8\xff' or
+            image_bytes[:8] == b'\x89PNG\r\n\x1a\n' or
+            (image_bytes[:4] == b'RIFF' and len(image_bytes) > 12 and image_bytes[8:12] == b'WEBP')
+        )
+        if not is_valid:
+            return jsonify({"error": f"Connected to {target_url}, but the response was not a valid image. Ensure you are using the snapshot URL (e.g., /shot.jpg)."}), 422
+
+        b64_str = base64.b64encode(image_bytes).decode('utf-8')
+        data_uri = f"data:image/jpeg;base64,{b64_str}"
+        return jsonify({
+            "status": "success",
+            "image_b64": data_uri,
+            "filename": f"ipcam_{int(time.time())}.jpg"
+        })
+    except urllib.error.URLError as e:
+        return jsonify({"error": f"Cannot reach phone at {target_url}. Ensure your phone & PC are on the same Wi-Fi network and the IP Webcam app is running."}), 502
+    except Exception as e:
+        return jsonify({"error": "Connection timed out while contacting IP Webcam."}), 504
 
 @app.route('/analyze', methods=['POST'])
 def analyze():

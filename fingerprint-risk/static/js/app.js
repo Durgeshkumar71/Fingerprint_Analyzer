@@ -24,12 +24,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const tabUpload = document.getElementById('tabUpload');
   const tabSamples = document.getElementById('tabSamples');
   const tabCamera = document.getElementById('tabCamera');
+  const tabIpCam = document.getElementById('tabIpCam');
   const samplesView = document.getElementById('samplesView');
   const samplesGrid = document.getElementById('samplesGrid');
   const cameraView = document.getElementById('cameraView');
   const cameraFeed = document.getElementById('cameraFeed');
   const captureCameraBtn = document.getElementById('captureCameraBtn');
   const cancelCameraBtn = document.getElementById('cancelCameraBtn');
+  const ipCamView = document.getElementById('ipCamView');
+  const ipCamUrl = document.getElementById('ipCamUrl');
+  const fetchIpCamBtn = document.getElementById('fetchIpCamBtn');
+  const cancelIpCamBtn = document.getElementById('cancelIpCamBtn');
 
   // Loading Overlay
   const loadingOverlay = document.getElementById('loadingOverlay');
@@ -122,10 +127,12 @@ document.addEventListener('DOMContentLoaded', () => {
     tabUpload.classList.remove('active');
     tabSamples.classList.remove('active');
     tabCamera.classList.remove('active');
+    if (tabIpCam) tabIpCam.classList.remove('active');
 
     dropZone.style.display = 'none';
     samplesView.classList.remove('active');
     cameraView.classList.remove('active');
+    if (ipCamView) ipCamView.style.display = 'none';
 
     stopCamera();
 
@@ -144,12 +151,56 @@ document.addEventListener('DOMContentLoaded', () => {
       tabCamera.classList.add('active');
       cameraView.classList.add('active');
       startCamera();
+    } else if (mode === 'ipcam') {
+      if (tabIpCam) tabIpCam.classList.add('active');
+      if (ipCamView) ipCamView.style.display = 'flex';
     }
   }
 
   tabUpload.addEventListener('click', () => switchInputTab('upload'));
   tabSamples.addEventListener('click', () => switchInputTab('samples'));
   tabCamera.addEventListener('click', () => switchInputTab('camera'));
+  if (tabIpCam) tabIpCam.addEventListener('click', () => switchInputTab('ipcam'));
+  if (cancelIpCamBtn) cancelIpCamBtn.addEventListener('click', () => switchInputTab('upload'));
+
+  if (fetchIpCamBtn) {
+    fetchIpCamBtn.addEventListener('click', async () => {
+      const url = (ipCamUrl.value || '').trim();
+      if (!url) {
+        alert('Please enter your IP Webcam URL (e.g. http://192.168.1.100:8080)');
+        return;
+      }
+      fetchIpCamBtn.disabled = true;
+      fetchIpCamBtn.textContent = '⏳ Fetching from Phone...';
+      try {
+        const resp = await fetch('/api/ipcam/capture', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        const data = await resp.json();
+        if (data.error) {
+          alert('IP Webcam Error: ' + data.error);
+          return;
+        }
+        selectedBase64 = data.image_b64;
+        selectedFile = null;
+        activeSampleId = null;
+
+        if (ipCamView) ipCamView.style.display = 'none';
+        previewImg.src = data.image_b64;
+        previewFilename.textContent = data.filename || 'IP Webcam Snapshot';
+        previewDims.textContent = 'Wireless Capture — Ready to scan';
+        previewContainer.style.display = 'flex';
+      } catch (err) {
+        console.error('IP Cam capture error:', err);
+        alert('Unable to reach IP Webcam. Check network connection and URL.');
+      } finally {
+        fetchIpCamBtn.disabled = false;
+        fetchIpCamBtn.textContent = '📸 Capture Frame from Phone';
+      }
+    });
+  }
 
   // --- File Dropzone & Input ---
   function handleFileSelected(file) {
