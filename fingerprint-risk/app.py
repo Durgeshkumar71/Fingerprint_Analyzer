@@ -463,15 +463,27 @@ def capture_ipcam():
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
-        req = urllib.request.Request(
-            target_url,
-            headers={'User-Agent': 'BioCypher-IPCam/2.0'}
-        )
-        with urllib.request.urlopen(req, timeout=5, context=ssl_ctx) as response:
-            image_bytes = response.read(MAX_FILE_MB * 1024 * 1024)
+        # Retry up to 3 times for intermittent Wi-Fi connections
+        image_bytes = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    target_url,
+                    headers={'User-Agent': 'BioCypher-IPCam/2.0'}
+                )
+                with urllib.request.urlopen(req, timeout=5, context=ssl_ctx) as response:
+                    image_bytes = response.read(MAX_FILE_MB * 1024 * 1024)
+                if image_bytes and len(image_bytes) >= 12:
+                    break
+            except Exception as retry_err:
+                last_error = retry_err
+                if attempt < 2:
+                    time.sleep(0.8)
 
         if not image_bytes or len(image_bytes) < 12:
-            return jsonify({"error": "Received empty or truncated frame from IP Webcam."}), 422
+            error_detail = str(last_error)[:100] if last_error else "Empty response"
+            return jsonify({"error": f"Cannot reach phone at {target_url} after 3 attempts. Detail: {error_detail}. Ensure the IP Webcam app is running and your phone is awake."}), 502
 
         # Verify magic byte header (JPEG, PNG, WEBP)
         is_valid = (
@@ -490,9 +502,9 @@ def capture_ipcam():
             "filename": f"ipcam_{int(time.time())}.jpg"
         })
     except urllib.error.URLError as e:
-        return jsonify({"error": f"Cannot reach phone at {target_url}. Ensure your phone & PC are on the same Wi-Fi network and the IP Webcam app is running."}), 502
+        return jsonify({"error": f"Cannot reach phone at {target_url}. Ensure your phone & PC are on the same Wi-Fi network and the IP Webcam app is running. ({str(e)[:80]})"}), 502
     except Exception as e:
-        return jsonify({"error": "Connection timed out while contacting IP Webcam."}), 504
+        return jsonify({"error": f"Connection failed: {str(e)[:80]}"}), 504
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -816,12 +828,25 @@ if __name__ == '__main__':
     # Debug mode explicitly controlled via environment, defaulting strictly to False
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
     port = int(os.environ.get('PORT', os.environ.get('FLASK_PORT', 5000)))
-    host = os.environ.get('FLASK_HOST', '127.0.0.1')
+    host = os.environ.get('FLASK_HOST', '0.0.0.0')
+
+    # Detect local LAN IP for display
+    local_ip = '127.0.0.1'
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
 
     print("=" * 70)
     print(" BioCypher 2.0 Hardened Biometric Cybersecurity Suite Starting ")
-    print(f" Interface: http://{host}:{port}")
-    print(f" Admin Gateway: http://{host}:{port}/admin")
+    print(f" Local:    http://127.0.0.1:{port}")
+    if host == '0.0.0.0':
+        print(f" Network:  http://{local_ip}:{port}  ← Open this on your phone!")
+    print(f" Admin:    http://127.0.0.1:{port}/admin")
     print(f" Security: OWASP Headers | Multi-Tier Rate Limiter | PBKDF2:SHA-256")
     print(f" Debug Mode: {debug_mode} (Strictly Enforced)")
     if _secret_is_ephemeral:
