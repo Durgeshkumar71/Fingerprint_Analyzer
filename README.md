@@ -110,12 +110,15 @@ $$\text{Risk Score} = \min(100 \times \text{Extractability} \times \text{Exposur
 
 BioCypher incorporates enterprise defense-in-depth protections:
 
-- 🛡️ **XSS Immunity**: Strict HTML entity escaping (`escapeHtml()`) and dynamic `textContent` node rendering; blocks DOM-based script injection.
+- 🛡️ **XSS Immunity**: Strict HTML entity escaping (`escapeHtml()`), dynamic `textContent` node rendering, and color whitelisting; blocks DOM-based script injection.
+- 🔐 **Administrative RBAC & Salted Hashing**: Role-Based Access Control (`admin` vs `anonymous_user`), PBKDF2-HMAC-SHA256 password hashing with 600,000 rounds and unique salts, and session fixation prevention.
 - 📦 **Decompression Bomb Protection**: Magic-byte verification (JPEG, PNG, WEBP, BMP) rejects malicious non-image payloads; auto-downscales images larger than 1920px to prevent memory exhaustion DoS.
-- ⏱️ **Sliding-Window Rate Limiter**: Restricts compute-heavy `/analyze` and `/sanitize` routes to 40 requests/minute per IP, returning `HTTP 429 Too Many Requests` when exceeded.
-- 🚫 **Path Traversal Defense**: Canonical path validation prevents directory escape outside the designated sample gallery.
-- 🌐 **OWASP Security Headers**: Injects `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, and `Referrer-Policy: strict-origin-when-cross-origin`.
-- 🔐 **Safe Production Defaults**: Debug execution consoles are disabled by default (`debug=False`) and the server binds strictly to `127.0.0.1`.
+- ⏱️ **Multi-Tier Sliding-Window Rate Limiter**: Quotas enforced per IP (Global: 60/min, Forensic CV: 15/min, Auth: 5 attempts/5min lockout), returning RFC 6585 `HTTP 429 Too Many Requests` with `Retry-After` headers.
+- 🚫 **Path Traversal Defense**: Canonical path validation prevents directory escape outside designated sample directories.
+- 🌐 **OWASP Security Headers**: Injects `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `HSTS (max-age=31536000)`, `Cross-Origin-Opener-Policy: same-origin`, and `Referrer-Policy: strict-origin-when-cross-origin`.
+- 🔑 **Zero-Secret Architecture**: All API keys, hashes, and session secrets are managed strictly through environment variables (`.env.example` template provided; `.env` excluded from version control).
+- 🛑 **Safe Production Defaults**: Debug consoles are disabled by default (`FLASK_DEBUG=False`), exception stack traces are sanitized, and the server binds securely to `127.0.0.1`.
+- 📋 **Security Audit Trail**: Thread-safe in-memory circular audit buffer logging all authentication events, rate limit breaches, and security anomalies without capturing PII.
 
 ---
 

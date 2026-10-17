@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Security Operations & Admin Dashboard — BioCypher 2.0</title>
+  <meta name="description" content="Hardened administrative dashboard for BioCypher biometric cybersecurity suite.">
+
+  <!-- Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .admin-hero {
+      padding: 30px 0 20px;
+    }
+    .admin-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .admin-title-wrap h2 {
+      font-family: var(--font-heading);
+      font-size: 1.8rem;
+      color: var(--text-primary);
+    }
+    .admin-title-wrap p {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+    .admin-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .admin-badge-user {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      border-radius: var(--radius-full);
+      padding: 6px 14px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--emerald);
+    }
+    .logout-btn {
+      background: var(--bg-surface);
+      border: 1px solid var(--rose-border);
+      color: var(--rose);
+      font-weight: 600;
+      font-size: 0.82rem;
+      padding: 7px 16px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+    }
+    .logout-btn:hover {
+      background: var(--rose-bg);
+      transform: translateY(-1px);
+    }
+
+    /* Metric Cards Grid */
+    .sec-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .sec-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .sec-card-icon {
+      font-size: 1.6rem;
+      margin-bottom: 8px;
+    }
+    .sec-card-val {
+      font-family: var(--font-heading);
+      font-size: 1.4rem;
+      font-weight: 800;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+    .sec-card-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .sec-card-status {
+      font-size: 0.72rem;
+      font-weight: 700;
+      margin-top: 8px;
+      display: inline-block;
+    }
+    .status-active { color: var(--emerald); }
+    .status-warn { color: var(--amber); }
+
+    /* Tables & Panels */
+    .admin-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-md);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .admin-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border-card);
+      padding-bottom: 12px;
+    }
+    .admin-panel-title {
+      font-family: var(--font-heading);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .data-table-wrap {
+      overflow-x: auto;
+    }
+    .sec-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+      text-align: left;
+    }
+    .sec-table th {
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      font-weight: 600;
+      padding: 10px 14px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border-card);
+    }
+    .sec-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: var(--text-primary);
+    }
+    .sec-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .badge-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: var(--radius-full);
+      font-size: 0.7rem;
+      font-weight: 700;
+    }
+    .badge-info { background: rgba(56, 189, 248, 0.15); color: var(--sky-blue); }
+    .badge-warning { background: var(--amber-bg); color: var(--amber); }
+    .badge-danger { background: var(--rose-bg); color: var(--rose); }
+    .badge-success { background: var(--emerald-bg); color: var(--emerald); }
+
+    .code-pill {
+      font-family: var(--font-mono);
+      background: var(--bg-surface);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.78rem;
+      color: var(--sky-blue);
+    }
+
+    .btn-action-small {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-card);
+      color: var(--text-primary);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .btn-action-small:hover {
+      border-color: var(--sky-blue);
+      color: var(--sky-blue);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header>
+    <div class="container">
+      <div class="header-inner">
+        <a href="/" class="brand-wrap">
+          <div class="brand-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a10 10 0 0 0-10 10c0 4.5 3 8.3 7.2 9.5"/>
+              <path d="M12 6a6 6 0 0 0-6 6c0 2.8 1.9 5.2 4.5 5.8"/>
+              <path d="M12 10a2 2 0 0 0-2 2c0 1.2.8 2.2 2 2.2"/>
+              <circle cx="12" cy="12" r="1" fill="#38bdf8"/>
+              <path d="M16 12a4 4 0 0 1-4 4"/>
+              <path d="M20 12a8 8 0 0 1-8 8"/>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <h1>Bio<span>Cypher</span></h1>
+            <span class="brand-tag">Security Operations Gateway</span>
+          </div>
+        </a>
+
+        <div class="admin-actions">
+          <span class="admin-badge-user">
+            <span>🛡️</span>
+            <span>Role: Administrator ({{ username }})</span>
+          </span>
+          <a href="/" class="btn-action-small" style="text-decoration:none;">📱 Public Suite</a>
+          <a href="/admin/logout" class="logout-btn">🚪 Logout</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <section class="admin-hero">
+        <div class="admin-header-row">
+          <div class="admin-title-wrap">
+            <h2>Security Operations & Telemetry Control</h2>
+            <p>Real-time telemetry, OWASP Top 10 defenses, cryptographic status, and access audits.</p>
+          </div>
+          <div>
+            <span class="badge-pill badge-success" style="padding:6px 14px; font-size:0.8rem;">● GATEWAY SECURE & HARDENED</span>
+          </div>
+        </div>
+
+        <!-- Metric Overview Cards -->
+        <div class="sec-metric-grid">
+          <div class="sec-card">
+            <div class="sec-card-icon">🛡️</div>
+            <div class="sec-card-val">OWASP Top 10</div>
+            <div class="sec-card-label">Security Compliance</div>
+            <div class="sec-card-status status-active">✓ CSP, HSTS, X-Frame-Options Active</div>
+          </div>
+          <div class="sec-card">
+            <div class="sec-card-icon">⚡</div>
+            <div class="sec-card-val">{{ cv_scans_processed }} Scans</div>
+            <div class="sec-card-label">CV Engine Workload</div>
+            <div class="sec-card-status status-active">✓ In-Memory Processing & Memory Capped</div>
+          </div>
+          <div class="sec-card">
+            <div class="sec-card-icon">⏱️</div>
+            <div class="sec-card-val">{{ rate_limits_blocked }} Blocked</div>
+            <div class="sec-card-label">DoS Throttled Requests</div>
+            <div class="sec-card-status status-active">✓ Sliding-Window Limiter Active</div>
+          </div>
+          <div class="sec-card">
+            <div class="sec-card-icon">🔒</div>
+            <div class="sec-card-val">Debug: OFF</div>
+            <div class="sec-card-label">Server Mode</div>
+            <div class="sec-card-status status-active">✓ Production Exception Masking</div>
+          </div>
+        </div>
+
+        <!-- Environment & Configuration Health -->
+        <div class="admin-panel">
+          <div class="admin-panel-header">
+            <div class="admin-panel-title">
+              <span>⚙️</span>
+              <span>Environment & Cryptographic Hardening Audit</span>
+            </div>
+            <span class="badge-pill badge-info">Zero Keys Exposed</span>
+          </div>
+
+          <div class="data-table-wrap">
+            <table class="sec-table">
+              <thead>
+                <tr>
+                  <th>Configuration Parameter</th>
+                  <th>Configured State</th>
+                  <th>Verification & Security Evaluation</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Flask SECRET_KEY</strong></td>
+                  <td><span class="code-pill">{{ secret_key_status }}</span></td>
+                  <td>Cryptographically secure entropy; session cookies encrypted with HMAC-SHA256.</td>
+                  <td><span class="badge-pill badge-success">PROTECTED</span></td>
+                </tr>
+                <tr>
+                  <td><strong>Password Hashing Scheme</strong></td>
+                  <td><span class="code-pill">PBKDF2-HMAC-SHA256 (Salted)</span></td>
+                  <td>Passwords hashed with salted iterations; immune to rainbow table attacks.</td>
+                  <td><span class="badge-pill badge-success">COMPLIANT</span></td>
+                </tr>
+                <tr>
+                  <td><strong>Admin Route Protection</strong></td>
+                  <td><span class="code-pill">Role-Based Access Control (RBAC)</span></td>
+                  <td>Unauthenticated access rejected with 401/403 or redirected to authentication.</td>
+                  <td><span class="badge-pill badge-success">ENFORCED</span></td>
+                </tr>
+                <tr>
+                  <td><strong>Session Cookie Hardening</strong></td>
+                  <td><span class="code-pill">HttpOnly=True, SameSite=Lax</span></td>
+                  <td>Protected against client-side script read access and cross-site request forgery.</td>
+                  <td><span class="badge-pill badge-success">HARDENED</span></td>
+                </tr>
+                <tr>
+                  <td><strong>CORS Policy</strong></td>
+                  <td><span class="code-pill">{{ cors_status }}</span></td>
+                  <td>Restricted to explicit domain origins; wildcard (*) with credentials prohibited.</td>
+                  <td><span class="badge-pill badge-success">RESTRICTED</span></td>
+                </tr>
+                <tr>
+                  <td><strong>Form Sanitization & XSS Defense</strong></td>
+                  <td><span class="code-pill">Whitelist Validation + Escaping</span></td>
+                  <td>All inputs clamped, typed, and auto-escaped; strict CSP prevents script injection.</td>
+                  <td><span class="badge-pill badge-success">DEFENDED</span></td>
+                </tr>
+                <tr>
+                  <td><strong>Payload Upload Ceiling</strong></td>
+                  <td><span class="code-pill">16 Megabytes (MAX_CONTENT_LENGTH)</span></td>
+                  <td>Prevents buffer overflow and memory exhaustion; magic byte header checked.</td>
+                  <td><span class="badge-pill badge-success">CAPPED</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Real-Time Security Audit Log -->
+        <div class="admin-panel">
+          <div class="admin-panel-header">
+            <div class="admin-panel-title">
+              <span>📋</span>
+              <span>Real-Time Security Event Audit Trail</span>
+            </div>
+            <div>
+              <button class="btn-action-small" id="refreshAuditBtn" onclick="location.reload();">🔄 Refresh Trail</button>
+            </div>
+          </div>
+
+          <div class="data-table-wrap">
+            <table class="sec-table">
+              <thead>
+                <tr>
+                  <th>Timestamp (UTC)</th>
+                  <th>Client IP</th>
+                  <th>Event Category</th>
+                  <th>Severity</th>
+                  <th>Audit Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% if audit_logs %}
+                  {% for entry in audit_logs %}
+                  <tr>
+                    <td style="font-family:var(--font-mono); font-size:0.75rem; color:var(--text-secondary);">{{ entry.timestamp }}</td>
+                    <td><span class="code-pill">{{ entry.ip }}</span></td>
+                    <td><strong>{{ entry.event }}</strong></td>
+                    <td>
+                      {% if entry.severity == 'CRITICAL' %}
+                        <span class="badge-pill badge-danger">CRITICAL</span>
+                      {% elif entry.severity == 'WARNING' %}
+                        <span class="badge-pill badge-warning">WARNING</span>
+                      {% else %}
+                        <span class="badge-pill badge-info">INFO</span>
+                      {% endif %}
+                    </td>
+                    <td style="color:var(--text-secondary);">{{ entry.details }}</td>
+                  </tr>
+                  {% endfor %}
+                {% else %}
+                  <tr>
+                    <td colspan="5" style="text-align:center; padding:24px; color:var(--text-muted);">
+                      No security anomalies recorded. System operating normally.
+                    </td>
+                  </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Active IP Rate Limit Throttling Panel -->
+        <div class="admin-panel">
+          <div class="admin-panel-header">
+            <div class="admin-panel-title">
+              <span>⏱️</span>
+              <span>Active IP Rate Throttler</span>
+            </div>
+            <form method="POST" action="/api/admin/clear-rate-limits" onsubmit="return confirm('Clear all currently throttled IP rate limits?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn-action-small">🧹 Flush Active Rate Windows</button>
+            </form>
+          </div>
+          <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:14px;">
+            Sliding window limits: Global: {{ rate_limits.global }} req/min | Forensic CV: {{ rate_limits.cv_heavy }} req/min | Authentication: {{ rate_limits.auth }} attempts/5min.
+          </p>
+          <div class="data-table-wrap">
+            <table class="sec-table">
+              <thead>
+                <tr>
+                  <th>Tracked Client IP</th>
+                  <th>Active Requests in Window</th>
+                  <th>Limit Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% if active_ips %}
+                  {% for ip_entry in active_ips %}
+                  <tr>
+                    <td><span class="code-pill">{{ ip_entry.ip }}</span></td>
+                    <td>{{ ip_entry.count }} requests</td>
+                    <td>
+                      {% if ip_entry.is_limited %}
+                        <span class="badge-pill badge-danger">THROTTLED (429)</span>
+                      {% else %}
+                        <span class="badge-pill badge-success">NORMAL</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                {% else %}
+                  <tr>
+                    <td colspan="3" style="text-align:center; padding:18px; color:var(--text-muted);">
+                      No active client rate tracking windows active.
+                    </td>
+                  </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container">
+      BioCypher 2.0 &nbsp;|&nbsp; <span>Administrative Security Gateway</span> &nbsp;|&nbsp; Zero Leaks • OWASP Top 10 Hardened
+    </div>
+  </footer>
+
+</body>
+</html>

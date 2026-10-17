@@ -1,7 +1,38 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+
+# Environment Variables & Secrets (CRITICAL SECURITY)
+.env
+.env.*
+!.env.example
+*.env
+*.key
+*.pem
+*.cert
+*.crt
+*.pfx
+secrets/
+credentials.json
+
+# Database & Storage
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads & Temporary Data
 static/uploads/*
 !static/uploads/.gitkeep
+fingerprint-risk/static/uploads/*
+!fingerprint-risk/static/uploads/.gitkeep
+*.log
+logs/
+
+# IDE & OS Artifacts
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini

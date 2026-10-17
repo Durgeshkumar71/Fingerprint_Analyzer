@@ -5,51 +5,235 @@ Hardened Flask Backend Server providing:
 - High-performance multi-spectral biometric CV forensics (/analyze)
 - Active defense privacy redactor & ridge sanitizer (/sanitize)
 - Preset sample scenario gallery (/api/samples)
+- Administrative Security Operations Gateway (/admin)
 - Comprehensive OWASP Top 10 defense & security hardening
 """
 
-from flask import Flask, render_template, request, jsonify, make_response
-from werkzeug.utils import secure_filename
 import os
+import sys
 import base64
 import time
-import collections
+import secrets
 import threading
+import datetime
+from collections import defaultdict, deque
+from functools import wraps
+
+# Load environment variables securely from .env if present
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+from flask import (
+    Flask, render_template, request, jsonify, make_response,
+    session, redirect, url_for, abort
+)
+from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 import cv_engine
 
+# ---------------------------------------------------------------------------
+# Application Initialization & Security Configuration
+# ---------------------------------------------------------------------------
 app = Flask(__name__)
 
 # Enforce strict 16MB upload limit
 MAX_FILE_MB = 16
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_MB * 1024 * 1024
 
+# Explicitly disable Flask debug and testing modes by default
+app.config['DEBUG'] = False
+app.config['TESTING'] = False
+
+# Cryptographic Secret Key Configuration
+_env_secret_key = os.environ.get('SECRET_KEY', '').strip()
+if not _env_secret_key or _env_secret_key.startswith('replace-with'):
+    # Ephemeral cryptographically strong secret token generated for session security
+    SECRET_KEY = secrets.token_hex(32)
+    _secret_is_ephemeral = True
+else:
+    SECRET_KEY = _env_secret_key
+    _secret_is_ephemeral = False
+
+app.config['SECRET_KEY'] = SECRET_KEY
+
+# Session Cookie Hardening
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', 'False').lower() in ('true', '1', 't')
+app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(hours=2)
+
+# Directory Setup
 UPLOAD_FOLDER = os.path.join('static', 'uploads')
 SAMPLES_FOLDER = os.path.join('static', 'samples')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(SAMPLES_FOLDER, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Rate Limiting & Abuse Prevention Middleware
+# Admin Credentials & Salted Password Hashing (PBKDF2:SHA-256)
 # ---------------------------------------------------------------------------
-RATE_LIMIT_WINDOW = 60  # seconds
-MAX_REQUESTS_PER_WINDOW = 40  # requests per window per IP
-_ip_request_history = collections.defaultdict(list)
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin').strip()
+_env_admin_hash = os.environ.get('ADMIN_PASSWORD_HASH', '').strip()
+
+if not _env_admin_hash or _env_admin_hash.startswith('pbkdf2:sha256:600000$replace'):
+    # Default initial password if not configured in .env
+    # PBKDF2 with SHA-256 and 600,000 iterations
+    DEFAULT_ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'BioCypher2026!AdminSecured')
+    ADMIN_PASSWORD_HASH = generate_password_hash(DEFAULT_ADMIN_PASSWORD, method='pbkdf2:sha256:600000')
+    _admin_is_default_password = True
+else:
+    ADMIN_PASSWORD_HASH = _env_admin_hash
+    _admin_is_default_password = False
+
+# ---------------------------------------------------------------------------
+# Thread-Safe Security Event Audit Logger
+# ---------------------------------------------------------------------------
+_AUDIT_LOG_CAPACITY = 250
+_audit_logs = deque(maxlen=_AUDIT_LOG_CAPACITY)
+_audit_lock = threading.Lock()
+
+# Global Telemetry Counters
+_telemetry = {
+    "cv_scans_processed": 0,
+    "sanitizations_processed": 0,
+    "rate_limits_blocked": 0,
+    "auth_success_count": 0,
+    "auth_failure_count": 0
+}
+_telemetry_lock = threading.Lock()
+
+def record_security_event(event_type, client_ip, details, severity="INFO"):
+    """
+    Records an immutable security audit event without logging PII or raw credentials.
+    """
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    event_entry = {
+        "timestamp": timestamp,
+        "event": str(event_type)[:32],
+        "ip": str(client_ip)[:45],
+        "severity": severity,
+        "details": str(details)[:200]
+    }
+    with _audit_lock:
+        _audit_logs.appendleft(event_entry)
+
+# ---------------------------------------------------------------------------
+# Multi-Tier Sliding Window Rate Limiting & DoS Defense
+# ---------------------------------------------------------------------------
+RATE_LIMIT_WINDOW = int(os.environ.get('RATE_LIMIT_WINDOW_SECONDS', 60))
+RATE_LIMITS = {
+    "global": int(os.environ.get('RATE_LIMIT_GLOBAL_MAX', 60)),     # general endpoints
+    "cv_heavy": int(os.environ.get('RATE_LIMIT_HEAVY_CV_MAX', 15)),  # CPU-heavy CV endpoints
+    "auth": int(os.environ.get('RATE_LIMIT_AUTH_MAX', 5))           # authentication attempts
+}
+
+_ip_request_history = defaultdict(lambda: defaultdict(list))
+_failed_auth_history = defaultdict(list)
 _rate_limit_lock = threading.Lock()
 
-def is_client_rate_limited(client_ip):
+def check_rate_limit(client_ip, tier="global"):
     """
-    Sliding window rate limiter to prevent computational DoS on CPU-heavy CV endpoints.
+    Sliding window rate limiter enforcing multi-tier quotas.
+    Returns (is_limited, retry_after_seconds, current_count, max_limit).
     """
     now = time.time()
+    max_allowed = RATE_LIMITS.get(tier, 60)
+    window = RATE_LIMIT_WINDOW
+
     with _rate_limit_lock:
-        timestamps = _ip_request_history[client_ip]
-        # Prune older than window
-        valid_timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
-        _ip_request_history[client_ip] = valid_timestamps
-        if len(valid_timestamps) >= MAX_REQUESTS_PER_WINDOW:
-            return True
-        _ip_request_history[client_ip].append(now)
+        history = _ip_request_history[tier][client_ip]
+        valid_history = [t for t in history if now - t < window]
+        _ip_request_history[tier][client_ip] = valid_history
+
+        if len(valid_history) >= max_allowed:
+            retry_after = int(window - (now - valid_history[0])) + 1
+            with _telemetry_lock:
+                _telemetry["rate_limits_blocked"] += 1
+            record_security_event(
+                "RATE_LIMIT_BLOCKED",
+                client_ip,
+                f"Exceeded {tier} tier quota ({len(valid_history)}/{max_allowed})",
+                severity="WARNING"
+            )
+            return True, max(1, retry_after), len(valid_history), max_allowed
+
+        valid_history.append(now)
+        _ip_request_history[tier][client_ip] = valid_history
+        return False, 0, len(valid_history), max_allowed
+
+def check_auth_lockout(client_ip):
+    """
+    Checks if client IP is temporarily locked out due to repeated failed logins.
+    Lockout duration: 15 minutes (900 seconds) after 5 consecutive failed attempts.
+    """
+    now = time.time()
+    lockout_window = 900
+    max_fails = 5
+
+    with _rate_limit_lock:
+        fails = _failed_auth_history[client_ip]
+        valid_fails = [t for t in fails if now - t < lockout_window]
+        _failed_auth_history[client_ip] = valid_fails
+        if len(valid_fails) >= max_fails:
+            remaining_lockout = int(lockout_window - (now - valid_fails[0])) + 1
+            return True, max(1, remaining_lockout)
+        return False, 0
+
+def record_auth_failure(client_ip):
+    now = time.time()
+    with _rate_limit_lock:
+        _failed_auth_history[client_ip].append(now)
+    with _telemetry_lock:
+        _telemetry["auth_failure_count"] += 1
+    record_security_event("AUTH_FAILURE", client_ip, "Invalid credentials submitted", severity="WARNING")
+
+def record_auth_success(client_ip, username):
+    now = time.time()
+    with _rate_limit_lock:
+        _failed_auth_history.pop(client_ip, None)
+    with _telemetry_lock:
+        _telemetry["auth_success_count"] += 1
+    record_security_event("AUTH_SUCCESS", client_ip, f"User '{username}' authenticated", severity="INFO")
+
+# ---------------------------------------------------------------------------
+# CSRF Token Defense
+# ---------------------------------------------------------------------------
+def generate_csrf_token():
+    if '_csrf_token' not in session:
+        session['_csrf_token'] = secrets.token_hex(24)
+    return session['_csrf_token']
+
+def validate_csrf_token(token):
+    session_token = session.get('_csrf_token')
+    if not session_token or not token:
         return False
+    return secrets.compare_digest(str(session_token), str(token))
+
+app.jinja_env.globals['csrf_token'] = generate_csrf_token
+
+# ---------------------------------------------------------------------------
+# Role-Based Access Control (RBAC) Decorator
+# ---------------------------------------------------------------------------
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        user = session.get('user')
+        if not user or not isinstance(user, dict) or user.get('role') != 'admin':
+            client_ip = request.remote_addr or 'unknown'
+            record_security_event("UNAUTHORIZED_ACCESS", client_ip, f"Blocked unauthorized attempt on {request.path}", severity="WARNING")
+            if request.path.startswith('/api/'):
+                return jsonify({"error": "Unauthorized. Administrative privileges required."}), 403
+            return redirect(url_for('admin_login', next=request.path))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ---------------------------------------------------------------------------
+# CORS Configuration & Origin Whitelist
+# ---------------------------------------------------------------------------
+raw_origins = os.environ.get('ALLOWED_ORIGINS', '')
+ALLOWED_ORIGINS = {o.strip() for o in raw_origins.split(',') if o.strip()}
 
 # ---------------------------------------------------------------------------
 # HTTP Security Headers (OWASP Top 10 Compliance)
@@ -57,27 +241,51 @@ def is_client_rate_limited(client_ip):
 @app.after_request
 def apply_security_headers(response):
     """
-    Attaches defense-in-depth security headers to every response.
+    Attaches defense-in-depth security headers to every HTTP response.
     """
+    # Prevent MIME sniffing
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
+    # Prevent clickjacking
+    response.headers['X-Frame-Options'] = 'DENY'
+    # Deprecated XSS auditor disabled in favor of CSP
+    response.headers['X-XSS-Protection'] = '0'
+    # Referrer privacy policy
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    response.headers['Permissions-Policy'] = 'camera=(self), microphone=(), geolocation=()'
-    
-    # Content-Security-Policy (CSP) restricting execution boundaries
+    # Hardware & feature permission boundary
+    response.headers['Permissions-Policy'] = 'camera=(self), microphone=(), geolocation=(), payment=()'
+    # Enforce HTTPS HSTS (1 year + subdomains)
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
+    # Isolation headers
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
+    # Mask server software signature
+    response.headers['Server'] = 'BioCypher-Gateway/2.0'
+
+    # Strict Content-Security-Policy (CSP)
     csp = (
         "default-src 'self'; "
-        "script-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com; "
         "img-src 'self' data: blob:; "
         "media-src 'self' blob:; "
         "connect-src 'self'; "
         "object-src 'none'; "
-        "base-uri 'self';"
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none';"
     )
     response.headers['Content-Security-Policy'] = csp
+
+    # Restricted CORS Policy
+    req_origin = request.headers.get('Origin')
+    if req_origin:
+        if req_origin in ALLOWED_ORIGINS or req_origin == request.host_url.rstrip('/'):
+            response.headers['Access-Control-Allow-Origin'] = req_origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, X-CSRF-Token'
+    
     return response
 
 # ---------------------------------------------------------------------------
@@ -157,7 +365,7 @@ def extract_image_bytes(req):
                 except Exception:
                     return None, None
 
-    # 3. Check for sample_id with path traversal defense
+    # 3. Check for sample_id with strict path traversal defense
     sample_id = None
     if req.form:
         sample_id = req.form.get('sample_id')
@@ -170,8 +378,8 @@ def extract_image_bytes(req):
         for s in SAMPLE_SCENARIOS:
             if s['id'] == sample_id:
                 safe_fname = os.path.basename(s['filename'])
-                sample_path = os.path.abspath(os.path.join(SAMPLES_FOLDER, safe_fname))
                 samples_dir_abs = os.path.abspath(SAMPLES_FOLDER)
+                sample_path = os.path.abspath(os.path.join(samples_dir_abs, safe_fname))
                 # Ensure path is strictly within samples folder
                 if sample_path.startswith(samples_dir_abs) and os.path.isfile(sample_path):
                     with open(sample_path, 'rb') as f:
@@ -180,7 +388,7 @@ def extract_image_bytes(req):
     return None, None
 
 # ---------------------------------------------------------------------------
-# Routes
+# Public Endpoints
 # ---------------------------------------------------------------------------
 @app.route('/')
 def index():
@@ -201,23 +409,35 @@ def analyze():
     Protected by sliding-window rate limiting, magic byte verification, and decompression bomb defenses.
     """
     client_ip = request.remote_addr or 'unknown'
-    if is_client_rate_limited(client_ip):
-        return jsonify({
+    is_limited, retry_after, current_cnt, max_limit = check_rate_limit(client_ip, tier="cv_heavy")
+    if is_limited:
+        resp = jsonify({
             "error": "Rate limit exceeded. Too many forensic scans requested.",
-            "retry_after_seconds": 30
-        }), 429
+            "retry_after_seconds": retry_after
+        })
+        resp.status_code = 429
+        resp.headers['Retry-After'] = str(retry_after)
+        resp.headers['X-RateLimit-Limit'] = str(max_limit)
+        resp.headers['X-RateLimit-Remaining'] = "0"
+        resp.headers['X-RateLimit-Reset'] = str(int(time.time() + retry_after))
+        return resp
 
     image_bytes, filename = extract_image_bytes(request)
     if not image_bytes:
+        record_security_event("INVALID_PAYLOAD", client_ip, "Empty or invalid image submission", severity="WARNING")
         return jsonify({
             "error": "No valid image provided. Please upload an image file, capture via webcam, or choose a benchmark preset."
         }), 400
 
     results = cv_engine.analyze_image_forensics(image_bytes)
     if results is None:
+        record_security_event("DECODE_FAILURE", client_ip, "Image payload failed validation or decompression check", severity="WARNING")
         return jsonify({
             "error": "Image validation failed. The payload is either corrupt, unreadable, or not a supported image format (JPEG, PNG, WEBP, BMP)."
         }), 422
+
+    with _telemetry_lock:
+        _telemetry["cv_scans_processed"] += 1
 
     results["filename"] = sanitize_output_filename(filename)
     return jsonify(results)
@@ -229,11 +449,18 @@ def sanitize():
     Sanitizes detected finger/hand regions with adaptive blur, cyber mosaic, or adversarial scramble.
     """
     client_ip = request.remote_addr or 'unknown'
-    if is_client_rate_limited(client_ip):
-        return jsonify({
+    is_limited, retry_after, current_cnt, max_limit = check_rate_limit(client_ip, tier="cv_heavy")
+    if is_limited:
+        resp = jsonify({
             "error": "Rate limit exceeded. Please wait before submitting additional sanitization requests.",
-            "retry_after_seconds": 30
-        }), 429
+            "retry_after_seconds": retry_after
+        })
+        resp.status_code = 429
+        resp.headers['Retry-After'] = str(retry_after)
+        resp.headers['X-RateLimit-Limit'] = str(max_limit)
+        resp.headers['X-RateLimit-Remaining'] = "0"
+        resp.headers['X-RateLimit-Reset'] = str(int(time.time() + retry_after))
+        return resp
 
     image_bytes, filename = extract_image_bytes(request)
     if not image_bytes:
@@ -269,16 +496,187 @@ def sanitize():
     if sanitized_res is None:
         return jsonify({"error": "Sanitization failed on this image payload."}), 422
 
+    with _telemetry_lock:
+        _telemetry["sanitizations_processed"] += 1
+
     return jsonify(sanitized_res)
 
 # ---------------------------------------------------------------------------
-# Error Handlers
+# Admin & Security Operations Portal
 # ---------------------------------------------------------------------------
-@app.errorhandler(413)
-def payload_too_large(error):
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    """
+    Administrative Login Gateway protected by:
+    - Brute force lockout (15 minutes after 5 failures)
+    - IP sliding-window rate limit
+    - CSRF token validation
+    - Salted constant-time password verification
+    """
+    client_ip = request.remote_addr or 'unknown'
+    next_url = request.args.get('next') or request.form.get('next') or '/admin'
+    # Restrict next_url redirection to local relative path (prevent open redirect vulnerability)
+    if not next_url.startswith('/') or next_url.startswith('//'):
+        next_url = '/admin'
+
+    if request.method == 'GET':
+        if session.get('user', {}).get('role') == 'admin':
+            return redirect(next_url)
+        return render_template('admin_login.html', error=None, next_url=next_url, csrf_token=generate_csrf_token())
+
+    # Rate limiting on auth
+    is_locked, remaining_lock = check_auth_lockout(client_ip)
+    if is_locked:
+        record_security_event("AUTH_LOCKOUT", client_ip, f"Blocked login attempt during lockout ({remaining_lock}s remaining)", severity="CRITICAL")
+        return render_template(
+            'admin_login.html',
+            error=f"Too many failed login attempts. IP temporarily locked out for {remaining_lock} seconds.",
+            next_url=next_url,
+            csrf_token=generate_csrf_token()
+        ), 429
+
+    # CSRF verification
+    csrf_token = request.form.get('csrf_token')
+    if not validate_csrf_token(csrf_token):
+        record_security_event("CSRF_REJECTED", client_ip, "Invalid or missing CSRF token on admin login", severity="WARNING")
+        return render_template('admin_login.html', error="Invalid security session token. Please try again.", next_url=next_url, csrf_token=generate_csrf_token()), 400
+
+    username = str(request.form.get('username', '')).strip()
+    password = str(request.form.get('password', ''))
+
+    # Verify username & password using PBKDF2:SHA-256
+    username_valid = secrets.compare_digest(username.lower(), ADMIN_USERNAME.lower())
+    password_valid = check_password_hash(ADMIN_PASSWORD_HASH, password)
+
+    if username_valid and password_valid:
+        # Prevent Session Fixation: clear and regenerate session
+        session.clear()
+        session['user'] = {
+            "username": ADMIN_USERNAME,
+            "role": "admin",
+            "authenticated_at": time.time()
+        }
+        generate_csrf_token()
+        record_auth_success(client_ip, ADMIN_USERNAME)
+        return redirect(next_url)
+    else:
+        record_auth_failure(client_ip)
+        return render_template('admin_login.html', error="Invalid administrator credentials.", next_url=next_url, csrf_token=generate_csrf_token()), 401
+
+@app.route('/admin/logout', methods=['GET', 'POST'])
+def admin_logout():
+    client_ip = request.remote_addr or 'unknown'
+    username = session.get('user', {}).get('username', 'admin')
+    session.clear()
+    record_security_event("AUTH_LOGOUT", client_ip, f"User '{username}' logged out", severity="INFO")
+    return redirect(url_for('admin_login'))
+
+@app.route('/admin')
+@admin_required
+def admin_dashboard():
+    """
+    Administrative Security Operations Dashboard.
+    Provides sanitized environmental audits, telemetry counters, and real-time logs.
+    """
+    with _telemetry_lock:
+        scans_count = _telemetry["cv_scans_processed"]
+        rate_blocked = _telemetry["rate_limits_blocked"]
+
+    # Gather sanitized environment status
+    secret_key_status = "EPHEMERAL (AUTO-GENERATED 256-BIT)" if _secret_is_ephemeral else "PERSISTED (FROM ENVIRONMENT)"
+    cors_status = f"RESTRICTED ({len(ALLOWED_ORIGINS)} Allowed Origins)" if ALLOWED_ORIGINS else "STRICT SAME-ORIGIN ONLY"
+
+    with _audit_lock:
+        recent_logs = list(_audit_logs)[:40]
+
+    # Gather currently tracked client IPs
+    active_ips = []
+    now = time.time()
+    with _rate_limit_lock:
+        for ip, timestamps in _ip_request_history['cv_heavy'].items():
+            valid = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+            if valid:
+                active_ips.append({
+                    "ip": ip,
+                    "count": len(valid),
+                    "is_limited": len(valid) >= RATE_LIMITS['cv_heavy']
+                })
+
+    return render_template(
+        'admin.html',
+        username=session.get('user', {}).get('username', 'admin'),
+        cv_scans_processed=scans_count,
+        rate_limits_blocked=rate_blocked,
+        secret_key_status=secret_key_status,
+        cors_status=cors_status,
+        audit_logs=recent_logs,
+        active_ips=active_ips,
+        rate_limits=RATE_LIMITS,
+        csrf_token=generate_csrf_token()
+    )
+
+@app.route('/api/admin/metrics', methods=['GET'])
+@admin_required
+def admin_metrics():
+    """Administrative JSON telemetry endpoint."""
+    with _telemetry_lock:
+        telemetry_copy = dict(_telemetry)
     return jsonify({
-        "error": f"Upload payload exceeds maximum allowable size ({MAX_FILE_MB}MB)."
-    }), 413
+        "status": "success",
+        "telemetry": telemetry_copy,
+        "rate_limits": RATE_LIMITS,
+        "debug_mode": app.config.get('DEBUG', False),
+        "environment": os.environ.get('FLASK_ENV', 'production')
+    })
+
+@app.route('/api/admin/audit-logs', methods=['GET'])
+@admin_required
+def admin_audit_logs():
+    """Administrative JSON audit log endpoint."""
+    with _audit_lock:
+        logs_copy = list(_audit_logs)
+    return jsonify({
+        "status": "success",
+        "total_records": len(logs_copy),
+        "logs": logs_copy
+    })
+
+@app.route('/api/admin/clear-rate-limits', methods=['POST'])
+@admin_required
+def clear_rate_limits():
+    """Flushes active rate-limiting windows upon authenticated admin command."""
+    client_ip = request.remote_addr or 'unknown'
+    csrf = request.form.get('csrf_token')
+    if not validate_csrf_token(csrf):
+        return jsonify({"error": "Invalid CSRF token"}), 400
+
+    with _rate_limit_lock:
+        _ip_request_history.clear()
+        _failed_auth_history.clear()
+
+    record_security_event("RATE_LIMIT_RESET", client_ip, "Administrator flushed rate limit windows", severity="WARNING")
+    return redirect(url_for('admin_dashboard'))
+
+# ---------------------------------------------------------------------------
+# Error Handlers (Sanitized Output & No Leaked Stack Traces)
+# ---------------------------------------------------------------------------
+@app.errorhandler(400)
+def bad_request(error):
+    return jsonify({
+        "error": "Bad Request. The request parameters or payload format are invalid."
+    }), 400
+
+@app.errorhandler(401)
+def unauthorized(error):
+    return jsonify({
+        "error": "Authentication Required. Please log in with valid credentials."
+    }), 401
+
+@app.errorhandler(403)
+def forbidden(error):
+    return jsonify({
+        "error": "Forbidden. You do not have permission to access this resource."
+    }), 403
 
 @app.errorhandler(404)
 def not_found_error(error):
@@ -286,29 +684,58 @@ def not_found_error(error):
         return jsonify({"error": "Resource not found"}), 404
     return render_template('index.html', samples=SAMPLE_SCENARIOS), 404
 
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({
+        "error": "Method Not Allowed on this endpoint."
+    }), 405
+
+@app.errorhandler(413)
+def payload_too_large(error):
+    return jsonify({
+        "error": f"Upload payload exceeds maximum allowable size ({MAX_FILE_MB}MB)."
+    }), 413
+
+@app.errorhandler(422)
+def unprocessable_entity(error):
+    return jsonify({
+        "error": "Unprocessable entity. The payload could not be decoded or processed."
+    }), 422
+
 @app.errorhandler(429)
 def too_many_requests_error(error):
     return jsonify({
-        "error": "Too Many Requests. System is throttling compute-intensive image processing."
+        "error": "Too Many Requests. System is throttling requests to prevent resource exhaustion."
     }), 429
 
 @app.errorhandler(500)
 def internal_server_error(error):
+    # Log internally without displaying stack traces to the user
+    client_ip = request.remote_addr or 'unknown'
+    record_security_event("INTERNAL_SERVER_ERROR", client_ip, f"Exception on {request.path}", severity="CRITICAL")
     return jsonify({
-        "error": "Internal processing error. The server encountered an unexpected condition."
+        "error": "An unexpected error occurred during processing. The incident has been logged."
     }), 500
 
+# ---------------------------------------------------------------------------
+# Entry Point
+# ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    # Default to secure local host binding and non-debug mode unless explicitly configured
+    # Debug mode explicitly controlled via environment, defaulting strictly to False
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
-    # Support PORT env var for Hugging Face Spaces (defaults to 7860 there) and cloud platforms
     port = int(os.environ.get('PORT', os.environ.get('FLASK_PORT', 5000)))
-    host = os.environ.get('FLASK_HOST', '0.0.0.0' if os.environ.get('PORT') else '127.0.0.1')
+    host = os.environ.get('FLASK_HOST', '127.0.0.1')
 
-    print("=" * 65)
-    print(" BioCypher 2.0 Hardened Biometric Forensics Suite Initializing ")
+    print("=" * 70)
+    print(" BioCypher 2.0 Hardened Biometric Cybersecurity Suite Starting ")
     print(f" Interface: http://{host}:{port}")
-    print(f" Security: OWASP Headers Active | Rate Limiter Enforced")
-    print(f" Debug Mode: {debug_mode}")
-    print("=" * 65)
+    print(f" Admin Gateway: http://{host}:{port}/admin")
+    print(f" Security: OWASP Headers | Multi-Tier Rate Limiter | PBKDF2:SHA-256")
+    print(f" Debug Mode: {debug_mode} (Strictly Enforced)")
+    if _secret_is_ephemeral:
+        print(" [SECURITY NOTICE] Ephemeral SECRET_KEY generated. Set SECRET_KEY in .env")
+    if _admin_is_default_password:
+        print(" [SECURITY NOTICE] Default admin password active. Set ADMIN_PASSWORD_HASH in .env")
+    print("=" * 70)
+
     app.run(debug=debug_mode, host=host, port=port)

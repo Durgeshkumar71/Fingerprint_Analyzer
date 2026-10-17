@@ -5,6 +5,8 @@ FROM python:3.10-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PORT=7860
+ENV FLASK_DEBUG=False
+ENV FLASK_ENV=production
 
 # Install system dependencies required for OpenCV headless
 RUN apt-get update && apt-get install -y --no-install-recommends \

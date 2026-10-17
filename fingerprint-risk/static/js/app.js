@@ -87,6 +87,27 @@ document.addEventListener('DOMContentLoaded', () => {
   let cameraStream = null;
   let activeSanitizeMode = 'blur';
 
+  // --- XSS Defense & Input Sanitization Helpers ---
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function sanitizeColor(colorStr) {
+    if (!colorStr || typeof colorStr !== 'string') return 'var(--sky-blue)';
+    const clean = colorStr.trim();
+    // Allow standard hex colors (#rgb or #rrggbb) or safe rgb/rgba
+    if (/^#[0-9a-fA-F]{3,8}$/.test(clean) || /^rgba?\([\d\s,.]+\)$/.test(clean)) {
+      return clean;
+    }
+    return 'var(--sky-blue)';
+  }
+
   // --- Layer Explanations Mapping ---
   const LAYER_EXPLANATIONS = {
     composite_hud: "Overview: Showing detected finger regions with tactical focus brackets.",
@@ -258,8 +279,8 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="preset-emoji">${emoji}</span>
           <span class="preset-risk-badge ${riskClass}">${riskLabel}</span>
         </div>
-        <h5>${s.title}</h5>
-        <p>${s.description}</p>
+        <h5>${escapeHtml(s.title)}</h5>
+        <p>${escapeHtml(s.description)}</p>
       `;
 
       card.addEventListener('click', () => {
@@ -526,7 +547,7 @@ document.addEventListener('DOMContentLoaded', () => {
       sanitizedStatusBadge.innerHTML = `
         <span>🛡️ Fingerprints Protected!</span>
         <span>•</span>
-        <span>Post-Exposure Risk: <strong>${result.post_risk_score}% (${result.post_risk_level})</strong></span>
+        <span>Post-Exposure Risk: <strong>${escapeHtml(result.post_risk_score)}% (${escapeHtml(result.post_risk_level)})</strong></span>
         <span>•</span>
         <span>Safe to post on Instagram, Snapchat & TikTok!</span>
       `;
@@ -598,7 +619,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
         <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:6px;">
           <span>Overall Risk:</span>
-          <strong style="color:${data.risk_color}">${safeRiskLevel} (${safeRiskScore}/100)</strong>
+          <strong style="color:${sanitizeColor(data.risk_color)}">${safeRiskLevel} (${safeRiskScore}/100)</strong>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:0.82rem;">
           <span>Generated On:</span>
